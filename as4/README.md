@@ -1,58 +1,72 @@
-MONGODB HORIZONTAL DATABASE SHARDING
-STEP-BY-STEP IMPLEMENTATION GUIDE
+# Experiment 4: Horizontal Database Sharding in MongoDB
 
-============================================================
-1. OVERALL ARCHITECTURE
-============================================================
+> **Lab Guide & Viva Cheat Sheet — System Design Lab, Semester 5**
 
-Windows PC
-    |
-    +-- Docker Network
-          |
-          +-- Config Server (configsvr:27017)
-          |
-          +-- mongos (Query Router)
-          |
-          +-- Shard 1 (shard01:27017)
-          |
-          +-- Shard 2 (shard02:27017)
+---
 
-Final Student collection:
+## Table of Contents
 
-College.Student
-Shard Key: RollNo
+1. [Objective](#objective)
+2. [System Architecture](#system-architecture)
+3. [Step-by-Step Implementation](#step-by-step-implementation)
+4. [Test Queries](#test-queries)
+5. [Viva Q&A Cheat Sheet](#viva-qa-cheat-sheet)
+6. [Screenshot Index](#screenshot-index)
+7. [Key Concepts Summary](#key-concepts-summary)
 
-RollNo < 6  --> shard1ReplSet
-RollNo >= 6 --> shard2ReplSet
+---
 
+## Objective
 
-============================================================
-2. CREATE PROJECT FOLDER
-============================================================
+Implement **Horizontal Database Sharding** (Data Partitioning) in MongoDB using Docker containers. Data from the `College.Student` collection is split across two shards based on the `RollNo` shard key.
 
-Create:
+---
 
-C:\mongodb-sharding
+## System Architecture
 
-Open Windows Command Prompt:
+```
+        [ Client / MongoDB Compass ]
+                    |
+                    v
+          +-------------------+
+          |  mongos (Router)  |
+          |    Port: 27017    |
+          +--------+----------+
+                   |
+         +---------+---------+
+         v                   v
++------------------+  +------------------+
+|  shard01         |  |  shard02         |
+|  shard1ReplSet   |  |  shard2ReplSet   |
+|  Port: 27018     |  |  Port: 27020     |
+|  RollNo 1 - 5    |  |  RollNo 6 - 10   |
++------------------+  +------------------+
+                   |
+                   v
+        +--------------------+
+        |  configsvr         |
+        |  configReplSet     |
+        |  Port: 27019       |
+        +--------------------+
+```
 
-cd C:\mongodb-sharding
+### Container Summary
 
+| Container   | Role           | Replica Set     | Host Port |
+|-------------|----------------|-----------------|-----------|
+| `configsvr` | Config Server  | `configReplSet` | 27019     |
+| `shard01`   | Shard 1        | `shard1ReplSet` | 27018     |
+| `shard02`   | Shard 2        | `shard2ReplSet` | 27020     |
+| `mongos`    | Query Router   | *(none)*        | 27017     |
 
-============================================================
-3. CREATE docker-compose.yml
-============================================================
+---
 
-Create a file named:
+## Step-by-Step Implementation
 
-docker-compose.yml
+### Step 1 — Create `docker-compose.yml`
 
-Put the following code inside it:
-
-------------------------------------------------------------
-
+```yaml
 services:
-
   configsvr:
     image: mongo:latest
     container_name: configsvr
@@ -62,7 +76,7 @@ services:
     volumes:
       - config_data:/data/db
     networks:
-      - mongo_cluster
+      - mongo-cluster
 
   shard01:
     image: mongo:latest
@@ -73,7 +87,7 @@ services:
     volumes:
       - shard01_data:/data/db
     networks:
-      - mongo_cluster
+      - mongo-cluster
 
   shard02:
     image: mongo:latest
@@ -84,7 +98,7 @@ services:
     volumes:
       - shard02_data:/data/db
     networks:
-      - mongo_cluster
+      - mongo-cluster
 
   mongos:
     image: mongo:latest
@@ -97,7 +111,7 @@ services:
     ports:
       - "27017:27017"
     networks:
-      - mongo_cluster
+      - mongo-cluster
 
 volumes:
   config_data:
@@ -105,703 +119,364 @@ volumes:
   shard02_data:
 
 networks:
-  mongo_cluster:
+  mongo-cluster:
     driver: bridge
+```
 
-------------------------------------------------------------
+---
 
+### Step 2 — Start Docker Containers
 
-============================================================
-4. START DOCKER CONTAINERS
-============================================================
-
-WHERE:
-Windows Command Prompt
-
-Run:
-
+```powershell
 docker compose up -d
-
-Verify:
-
 docker ps
+```
 
-You should see:
+**Expected output:** 4 containers running — `configsvr`, `shard01`, `shard02`, `mongos`
 
-configsvr
-shard01
-shard02
-mongos
+> Screenshot: `docs/docker_ps.png`
 
+---
 
-============================================================
-5. CONFIGURE CONFIG SERVER
-============================================================
+### Step 3 — Initialize Replica Sets
 
-WHERE:
-Windows Command Prompt
+Run each command in PowerShell:
 
-Run:
+**Config Server:**
+```powershell
+docker exec -it configsvr mongosh --eval "rs.initiate({ _id: 'configReplSet', configsvr: true, members: [{ _id: 0, host: 'configsvr:27017' }] })"
+```
 
-docker exec -it configsvr mongosh
+> Screenshots: `docs/configsvr_rs_status_1.png`, `docs/configsvr_rs_status_2.png`
 
-Now you are inside Config Server mongosh.
+**Shard 1:**
+```powershell
+docker exec -it shard01 mongosh --eval "rs.initiate({ _id: 'shard1ReplSet', members: [{ _id: 0, host: 'shard01:27017' }] })"
+```
 
-Run:
+> Screenshots: `docs/shard01_rs_status_1.png`, `docs/shard01_rs_status_2.png`
 
-rs.initiate({
-    _id: "configReplSet",
-    configsvr: true,
-    members: [
-        {
-            _id: 0,
-            host: "configsvr:27017"
-        }
-    ]
-})
+**Shard 2:**
+```powershell
+docker exec -it shard02 mongosh --eval "rs.initiate({ _id: 'shard2ReplSet', members: [{ _id: 0, host: 'shard02:27017' }] })"
+```
 
-Verify:
+> Screenshots: `docs/shard02_rs_status_1.png`, `docs/shard02_rs_status_2.png`
 
-rs.status()
+---
 
-Look for:
+### Step 4 — Connect to `mongos` and Verify
 
-stateStr: "PRIMARY"
-
-Then exit:
-
-exit
-
-
-============================================================
-6. CONFIGURE SHARD 1
-============================================================
-
-WHERE:
-Windows Command Prompt
-
-Run:
-
-docker exec -it shard01 mongosh
-
-Now you are inside Shard 1 mongosh.
-
-Run:
-
-rs.initiate({
-    _id: "shard1ReplSet",
-    members: [
-        {
-            _id: 0,
-            host: "shard01:27017"
-        }
-    ]
-})
-
-Verify:
-
-rs.status()
-
-Look for:
-
-stateStr: "PRIMARY"
-
-Exit:
-
-exit
-
-
-============================================================
-7. CONFIGURE SHARD 2
-============================================================
-
-WHERE:
-Windows Command Prompt
-
-Run:
-
-docker exec -it shard02 mongosh
-
-Now you are inside Shard 2 mongosh.
-
-Run:
-
-rs.initiate({
-    _id: "shard2ReplSet",
-    members: [
-        {
-            _id: 0,
-            host: "shard02:27017"
-        }
-    ]
-})
-
-Verify:
-
-rs.status()
-
-Look for:
-
-stateStr: "PRIMARY"
-
-Exit:
-
-exit
-
-
-============================================================
-8. CONNECT TO MONGOS
-============================================================
-
-WHERE:
-Windows Command Prompt
-
-Run:
-
+```powershell
 docker exec -it mongos mongosh
+```
 
-You should see:
+Inside mongosh shell, run:
 
-[direct: mongos] test>
-
-All remaining MongoDB sharding commands should be
-executed through mongos.
-
-
-============================================================
-9. VERIFY MONGOS
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
+```js
 db.hello()
+```
 
-Look for:
+**Expected:** Output contains `msg: 'isdbgrid'` — confirms you are connected to `mongos` router, not a raw shard.
 
-msg: "isdbgrid"
+> Screenshot: `docs/mongos_db_hello.png`
 
-This confirms that the connection is through the
-MongoDB query router.
+---
 
+### Step 5 — Add Shards to Cluster
 
-============================================================
-10. ADD SHARD 1
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
+```js
 sh.addShard("shard1ReplSet/shard01:27017")
-
-
-============================================================
-11. ADD SHARD 2
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
 sh.addShard("shard2ReplSet/shard02:27017")
-
-
-============================================================
-12. VERIFY THE SHARDED CLUSTER
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
 sh.status()
+```
 
-You should see:
+> Screenshots: `docs/mongos_sh_status_1.png` to `docs/mongos_sh_status_7.png`
 
-shard1ReplSet/shard01:27017
+---
 
-and:
+### Step 6 — Enable Sharding and Create Collection
 
-shard2ReplSet/shard02:27017
-
-
-============================================================
-13. ENABLE SHARDING FOR COLLEGE DATABASE
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
+```js
 sh.enableSharding("College")
-
-Verify:
-
-sh.status()
-
-Look for:
-
-College
-
-
-============================================================
-14. SWITCH TO COLLEGE DATABASE
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
 use College
-
-Prompt should become:
-
-[direct: mongos] College>
-
-
-============================================================
-15. CREATE STUDENT COLLECTION
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
 db.createCollection("Student")
-
-Verify:
-
 show collections
+```
 
-Expected:
+> Screenshot: `docs/show_collections.png`
 
-Student
+---
 
+### Step 7 — Insert Sample Data
 
-============================================================
-16. INSERT STUDENT RECORDS
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
+```js
 db.Student.insertMany([
-    { RollNo: 1, Name: "Arun", Department: "CSE", Age: 20 },
-    { RollNo: 2, Name: "Bala", Department: "CSE", Age: 21 },
-    { RollNo: 3, Name: "Charan", Department: "IT", Age: 20 },
-    { RollNo: 4, Name: "Dinesh", Department: "CSE", Age: 21 },
-    { RollNo: 5, Name: "Elango", Department: "ECE", Age: 22 },
-    { RollNo: 6, Name: "Farhan", Department: "IT", Age: 22 },
-    { RollNo: 7, Name: "Gokul", Department: "CSE", Age: 20 },
-    { RollNo: 8, Name: "Hari", Department: "ECE", Age: 21 },
-    { RollNo: 9, Name: "Ishan", Department: "IT", Age: 20 },
+    { RollNo: 1,  Name: "Arun",    Department: "CSE", Age: 20 },
+    { RollNo: 2,  Name: "Bala",    Department: "CSE", Age: 21 },
+    { RollNo: 3,  Name: "Charan",  Department: "IT",  Age: 20 },
+    { RollNo: 4,  Name: "Dinesh",  Department: "CSE", Age: 21 },
+    { RollNo: 5,  Name: "Elango",  Department: "ECE", Age: 22 },
+    { RollNo: 6,  Name: "Farhan",  Department: "IT",  Age: 22 },
+    { RollNo: 7,  Name: "Gokul",   Department: "CSE", Age: 20 },
+    { RollNo: 8,  Name: "Hari",    Department: "ECE", Age: 21 },
+    { RollNo: 9,  Name: "Ishan",   Department: "IT",  Age: 20 },
     { RollNo: 10, Name: "Karthik", Department: "CSE", Age: 22 }
 ])
+```
 
-Verify:
+---
 
-db.Student.find().sort({ RollNo: 1 })
+### Step 8 — Create Index and Shard the Collection
 
+> **Important:** In MongoDB 8.x, you must create the index BEFORE sharding. Older versions did this automatically.
 
-============================================================
-17. SELECT SHARD KEY
-============================================================
+```js
+db.Student.createIndex({ RollNo: 1 })
+sh.shardCollection("College.Student", { RollNo: 1 })
+```
 
-For this assignment, use:
+`RollNo` is the **shard key** — MongoDB uses this field to decide which shard each document belongs to.
 
-RollNo
+---
 
-as the shard key.
+### Step 9 — Split Chunks and Move Data
 
-The shard key determines how MongoDB divides the
-collection into chunks.
+```js
+// Split the chunk boundary at RollNo: 6
+sh.splitAt("College.Student", { RollNo: 6 })
 
+// Move the lower chunk (RollNo < 6) to shard1
+sh.moveChunk("College.Student", { RollNo: 1 }, "shard1ReplSet")
 
-============================================================
-18. SHARD THE STUDENT COLLECTION
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
-sh.shardCollection(
-    "College.Student",
-    { RollNo: 1 }
-)
-
-Verify:
-
-sh.status()
-
-Look for:
-
-College.Student
-
-and:
-
-shardKey: { RollNo: 1 }
-
-
-============================================================
-19. CHECK INITIAL DISTRIBUTION
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
+// Verify the distribution
 db.Student.getShardDistribution()
+```
 
-Initially, MongoDB may show all documents on one shard.
+> Screenshot: `docs/get_shard_distribution.png`
 
-This is normal because the collection may initially
-contain only one chunk.
+**Final distribution:**
 
+| Shard          | Documents | RollNo Range |
+|----------------|-----------|--------------|
+| shard1ReplSet  | 5         | 1 to 5       |
+| shard2ReplSet  | 5         | 6 to 10      |
 
-============================================================
-20. SPLIT THE CHUNK
-============================================================
+---
 
-WHERE:
-Inside mongos
+## Test Queries
 
-Run:
+All queries run inside `mongos` shell (`docker exec -it mongos mongosh` then `use College`).
 
-sh.splitAt(
-    "College.Student",
-    { RollNo: 6 }
-)
+### Test 1 — Targeted Query (Shard Key)
 
-This creates two logical chunks:
-
-Chunk 1:
-MinKey -> 6
-
-Chunk 2:
-6 -> MaxKey
-
-Verify:
-
-sh.status()
-
-
-============================================================
-21. MOVE LOWER CHUNK TO SHARD 1
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
-sh.moveChunk(
-    "College.Student",
-    { RollNo: 1 },
-    "shard1ReplSet"
-)
-
-This moves the chunk containing RollNo = 1
-to shard1ReplSet.
-
-The resulting chunk ownership should be:
-
-MinKey -> 6
-    shard1ReplSet
-
-6 -> MaxKey
-    shard2ReplSet
-
-
-============================================================
-22. VERIFY FINAL SHARD DISTRIBUTION
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
-db.Student.getShardDistribution()
-
-Then:
-
-sh.status()
-
-The final output should show data distributed
-between both shards.
-
-Expected logical distribution:
-
-Shard 1:
-RollNo < 6
-
-Shard 2:
-RollNo >= 6
-
-
-============================================================
-23. TEST CASE 1 - SHARD KEY SEARCH
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
+```js
 db.Student.find({ RollNo: 3 })
+```
 
-This searches using the shard key.
+- **Type:** Targeted Query
+- **How it works:** `mongos` checks Config Server, sees `RollNo: 3` is in chunk `[1, 6)`, routes directly to `shard1ReplSet`. `shard2` is not involved.
+- **Why fast:** Only 1 shard is queried.
 
+> Screenshot: `docs/query_test_1_shard_key.png`
 
-============================================================
-24. TEST CASE 2 - NON-SHARD-KEY SEARCH
-============================================================
+---
 
-WHERE:
-Inside mongos
+### Test 2 — Scatter-Gather Query (Non-Shard Key)
 
-Run:
-
+```js
 db.Student.find({ Department: "CSE" })
+```
 
-This searches using a field that is not the shard key.
+- **Type:** Scatter-Gather Query
+- **How it works:** `Department` is not the shard key. `mongos` broadcasts to **all shards**, collects results, and merges them.
+- **Why slower:** Every shard must be queried.
 
-
-============================================================
-25. TEST CASE 3 - RANGE QUERY
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
-db.Student.find({
-    RollNo: { $gte: 6 }
-}).sort({ RollNo: 1 })
-
-
-============================================================
-26. TEST CASE 4 - VERIFY DISTRIBUTION
-============================================================
-
-WHERE:
-Inside mongos
-
-Run:
-
-db.Student.getShardDistribution()
-
-
-============================================================
-27. FINAL VERIFICATION
-============================================================
-
-Run all of the following inside mongos:
-
-db.hello()
-
-sh.status()
-
-db.Student.find().sort({ RollNo: 1 })
-
-db.Student.getShardDistribution()
-
-
-============================================================
-28. IMPORTANT COMMAND LOCATION SUMMARY
-============================================================
-
-WINDOWS COMMAND PROMPT:
-
-docker compose up -d
-
-docker ps
-
-docker exec -it configsvr mongosh
-
-docker exec -it shard01 mongosh
-
-docker exec -it shard02 mongosh
-
-docker exec -it mongos mongosh
-
-
-CONFIG SERVER MONGOSH:
-
-rs.initiate(...)
-rs.status()
-
-
-SHARD 1 MONGOSH:
-
-rs.initiate(...)
-rs.status()
-
-
-SHARD 2 MONGOSH:
-
-rs.initiate(...)
-rs.status()
-
-
-MONGOS:
-
-db.hello()
-
-sh.addShard(...)
-
-sh.status()
-
-sh.enableSharding("College")
-
-use College
-
-db.createCollection("Student")
-
-db.Student.insertMany(...)
-
-sh.shardCollection(...)
-
-db.Student.getShardDistribution()
-
-sh.splitAt(...)
-
-sh.moveChunk(...)
-
-db.Student.find(...)
-
-
-============================================================
-29. RECOMMENDED SCREENSHOTS FOR REPORT
-============================================================
-
-1. docker ps
-   Shows configsvr, shard01, shard02 and mongos.
-
-2. Config Server rs.status()
-   Shows PRIMARY.
-
-3. Shard 1 rs.status()
-   Shows PRIMARY.
-
-4. Shard 2 rs.status()
-   Shows PRIMARY.
-
-5. mongos db.hello()
-   Shows msg: "isdbgrid".
-
-6. sh.status()
-   Shows both shards.
-
-7. show collections
-   Shows Student.
-
-8. sh.shardCollection(...)
-   Shows collectionsharded.
-
-9. sh.splitAt(...)
-   Shows successful split.
-
-10. sh.moveChunk(...)
-    Shows successful migration.
-
-11. db.Student.getShardDistribution()
-    Shows final distribution across shards.
-
-12. Student search queries
-    Shows test case outputs.
-
-
-============================================================
-30. FINAL EXPECTED ARCHITECTURE
-============================================================
-
-                    MONGODB SHARDED CLUSTER
-
-                         +---------+
-                         |  mongos |
-                         +----+----+
-                              |
-                  +-----------+-----------+
-                  |                       |
-             +----v----+             +----v----+
-             | Shard 1 |             | Shard 2 |
-             | shard01 |             | shard02 |
-             +----+----+             +----+----+
-                  |                       |
-                  +-----------+-----------+
-                              |
-                         Student Data
-
-                       Shard Key: RollNo
-
-                  +-----------+-----------+
-                  |                       |
-              RollNo < 6             RollNo >= 6
-                  |                       |
-                  v                       v
-              Shard 1                 Shard 2
-
-
-============================================================
-END OF IMPLEMENTATION GUIDE
-============================================================
-
+> Screenshot: `docs/query_test_2_non_shard_key.png`
 
 ---
 
-## 🎯 Viva & Demo Question Bank (Q&A)
+### Test 3 — Range Query on Shard Key
 
-### Q1: What is Horizontal Sharding vs Vertical Scaling?
-* **Answer:** Vertical scaling (scaling up) increases CPU/RAM on a single machine, which has hardware limits. Horizontal sharding (scaling out) partitions data across multiple independent database servers (shards), enabling linear scalability.
+```js
+db.Student.find({ RollNo: { $gte: 6 } }).sort({ RollNo: 1 })
+```
 
-### Q2: What is the role of mongos?
-* **Answer:** mongos is an interface/router between the client application and the sharded cluster. It receives queries, checks chunk metadata from the Config Server, routes queries to the appropriate shard(s), and returns merged results to the client.
+- **Type:** Targeted Range Query
+- **How it works:** `RollNo >= 6` maps entirely to chunk `[6, MaxKey)` on `shard2ReplSet`. Only `shard2` is queried.
 
-### Q3: Why is a Config Server necessary?
-* **Answer:** The Config Server maintains the metadata for the entire cluster (e.g., which shards exist, what collections are sharded, chunk ranges, and which shard owns which chunk). Without configsvr, mongos cannot route queries correctly.
-
-### Q4: What is a Shard Key and how was it chosen here?
-* **Answer:** A Shard Key is a field (or compound fields) in documents that determines how data is distributed across chunks and shards. In this lab, RollNo was chosen as the range-based shard key.
-
-### Q5: Why did we need db.Student.createIndex({ RollNo: 1 }) before sh.shardCollection?
-* **Answer:** In MongoDB 8.x+, MongoDB requires an explicit index that starts with the proposed shard key before sh.shardCollection() can be executed.
-
-### Q6: What is the difference between a Targeted Query and a Scatter-Gather Query?
-* **Answer:** 
-  * **Targeted Query:** Filters by the Shard Key (RollNo). mongos routes the request to only the specific shard containing that data.
-  * **Scatter-Gather Query:** Filters by a non-shard key (Department). mongos must broadcast the query to **all shards** in the cluster, wait for responses, and aggregate them.
-
-### Q7: What is a Chunk and why did we run sh.splitAt and sh.moveChunk?
-* **Answer:** A chunk is a subset of sharded data bounded by minimum and maximum shard key ranges. We manually split the chunk at RollNo: 6 and migrated the lower chunk (RollNo < 6) to shard01 to demonstrate manual chunk balancing and data distribution across two distinct shards.
+> Screenshots: `docs/query_test_3_range_query_1.png`, `docs/query_test_3_range_query_2.png`
 
 ---
 
-## 🖼️ Documented Screenshots (docs/ folder)
+### Test 4 — Shard Distribution Statistics
 
-* docker_ps.png — Verification of all 4 running containers
-* configsvr_rs_status_1.png & configsvr_rs_status_2.png — Config server replica set status (PRIMARY)
-* shard01_rs_status_1.png & shard01_rs_status_2.png — Shard 1 replica set status (PRIMARY)
-* shard02_rs_status_1.png & shard02_rs_status_2.png — Shard 2 replica set status (PRIMARY)
-* mongos_db_hello.png — Router connection verification (isdbgrid)
-* mongos_sh_status_1.png to mongos_sh_status_7.png — Cluster topology & sharding status
-* show_collections.png — Collection list in College database
-* query_test_1_shard_key.png — Test Case 1: Targeted query execution
-* query_test_2_non_shard_key.png — Test Case 2: Scatter-gather query execution
-* query_test_3_range_query_1.png & query_test_3_range_query_2.png — Test Case 3: Range query execution
-* get_shard_distribution.png — Test Case 4: Final shard distribution statistics
+```js
+db.Student.getShardDistribution()
+```
+
+Shows per-shard document count, chunk ranges, and data size.
+
+> Screenshot: `docs/get_shard_distribution.png`
+
+---
+
+## Viva Q&A Cheat Sheet
+
+### Q1: What is Database Sharding?
+
+**Answer:** Sharding is **horizontal scaling** (scale-out) where a large database is split into smaller pieces called shards, each stored on a separate server. Each shard holds a subset of the data. This allows the system to handle datasets and workloads too large for a single machine.
+
+---
+
+### Q2: Horizontal Scaling vs Vertical Scaling?
+
+| Feature      | Vertical Scaling (Scale-Up)       | Horizontal Scaling (Sharding)        |
+|--------------|-----------------------------------|--------------------------------------|
+| Method       | Add CPU/RAM to existing machine   | Add more machines to the cluster     |
+| Cost         | Expensive enterprise hardware     | Cheaper commodity servers            |
+| Upper Limit  | Physical hardware limit           | Nearly unlimited                     |
+| Downtime     | Usually requires restart          | Can add shards without downtime      |
+| Example      | 16 GB RAM → 64 GB RAM             | shard01 + shard02 + shard03...       |
+
+---
+
+### Q3: What is a Shard Key? Why use `RollNo`?
+
+**Answer:** A shard key is the field MongoDB uses to partition data. `RollNo` was chosen because:
+- It is unique per student
+- It is monotonically increasing — enables efficient range queries
+- Queries will typically filter by `RollNo`
+- It provides even distribution (low cardinality keys like `Department` would create hotspots)
+
+---
+
+### Q4: What does `mongos` do?
+
+**Answer:** `mongos` is the **query router**. It:
+- Does NOT store application data
+- Queries Config Servers to learn which shard holds which chunk
+- Routes **targeted queries** to a single shard
+- **Broadcasts** scatter-gather queries to all shards and merges results
+- Is the only component clients connect to — shards are transparent to the application
+
+---
+
+### Q5: What is the Config Server (`configsvr`)?
+
+**Answer:** The Config Server stores **cluster metadata**:
+- List of all shards
+- Chunk ranges and their shard assignments
+- Database and collection shard configurations
+
+`mongos` caches this metadata and queries Config Servers to keep it fresh. Without Config Servers, `mongos` cannot route queries.
+
+---
+
+### Q6: What is a Chunk?
+
+**Answer:** A chunk is a contiguous range of shard key values assigned to one shard. Default chunk size is 128 MB. MongoDB's **balancer** auto-splits chunks when they grow too large and migrates them between shards to maintain even distribution. In this experiment, we manually split at `RollNo: 6` to force a specific distribution.
+
+---
+
+### Q7: Targeted Query vs Scatter-Gather Query?
+
+| Aspect          | Targeted Query                  | Scatter-Gather Query                 |
+|-----------------|---------------------------------|--------------------------------------|
+| Query field     | Includes shard key (`RollNo`)   | Does NOT include shard key           |
+| `mongos` action | Routes to 1 shard               | Broadcasts to ALL shards             |
+| Performance     | Fast — minimal network hops     | Slower — all shards must respond     |
+| Example         | `find({ RollNo: 3 })`           | `find({ Department: "CSE" })`        |
+
+---
+
+### Q8: Why was `createIndex` needed before `sh.shardCollection`?
+
+**Answer:** MongoDB 8.x requires an explicit index on the shard key field before sharding a collection. In older versions (pre-5.0), this index was automatically created. The new requirement forces developers to be intentional about indexing for performance. Without the index, `sh.shardCollection` throws:
+```
+MongoServerError[InvalidOptions]: Please create an index that starts with the proposed shard key
+```
+
+---
+
+### Q9: Why did MongoDB Compass show wrong data initially?
+
+**Answer:** The local Windows MongoDB service was running on port 27017, which is the same port `mongos` binds to. When Compass connected to `localhost:27017`, it connected to the local service — not our Docker `mongos`. Stopping the local service (`net stop MongoDB`) freed port 27017, and `mongos` then correctly received all connections.
+
+---
+
+### Q10: What is a Replica Set? Why does each shard have one?
+
+**Answer:** A Replica Set is a group of MongoDB instances maintaining identical data for **high availability** and **fault tolerance**. If the primary node fails, a secondary automatically becomes the new primary. Each shard uses a replica set so the cluster can survive node failures. Our experiment uses single-member replica sets (sufficient for demo), but production systems use 3+ members.
+
+---
+
+### Q11: What does `sh.splitAt` do?
+
+**Answer:** `sh.splitAt("College.Student", { RollNo: 6 })` manually creates a chunk boundary at `RollNo: 6`, resulting in two chunks:
+- `[MinKey, 6)` — documents with `RollNo < 6`
+- `[6, MaxKey)` — documents with `RollNo >= 6`
+
+Normally MongoDB auto-splits chunks at 128 MB. Manual splitting gives precise control over data placement.
+
+---
+
+### Q12: What does `sh.moveChunk` do?
+
+**Answer:** `sh.moveChunk("College.Student", { RollNo: 1 }, "shard1ReplSet")` migrates the chunk containing `RollNo: 1` (which is the `[MinKey, 6)` chunk) to `shard1ReplSet`. This triggers a data migration process where MongoDB copies the chunk data to the destination shard, then updates the Config Server metadata, and finally removes the data from the source shard.
+
+---
+
+### Q13: What is the MongoDB Balancer?
+
+**Answer:** The Balancer is a background process that monitors chunk distribution across shards. When one shard has significantly more chunks than others, the balancer automatically migrates chunks to even the load. In production, this ensures no single shard becomes a hotspot. We can check balancer status with `sh.status()`.
+
+---
+
+## Screenshot Index
+
+| File                           | Contents                                        |
+|--------------------------------|-------------------------------------------------|
+| `docker_ps.png`                | All 4 Docker containers running                 |
+| `configsvr_rs_status_1.png`    | Config server replica set initiation            |
+| `configsvr_rs_status_2.png`    | Config server confirmed as PRIMARY              |
+| `shard01_rs_status_1.png`      | Shard 1 replica set initiation                  |
+| `shard01_rs_status_2.png`      | Shard 1 confirmed as PRIMARY                    |
+| `shard02_rs_status_1.png`      | Shard 2 replica set initiation                  |
+| `shard02_rs_status_2.png`      | Shard 2 confirmed as PRIMARY                    |
+| `mongos_db_hello.png`          | `db.hello()` output showing `isdbgrid`          |
+| `mongos_sh_status_1.png`       | `sh.status()` — shard list                      |
+| `mongos_sh_status_2.png`       | `sh.status()` — databases section               |
+| `mongos_sh_status_3.png`       | `sh.status()` — chunk details (part 1)          |
+| `mongos_sh_status_4.png`       | `sh.status()` — chunk details (part 2)          |
+| `mongos_sh_status_5.png`       | `sh.status()` — chunk details (part 3)          |
+| `mongos_sh_status_6.png`       | `sh.status()` — chunk details (part 4)          |
+| `mongos_sh_status_7.png`       | `sh.status()` — final summary                   |
+| `show_collections.png`         | `Student` collection in `College` DB            |
+| `query_test_1_shard_key.png`   | Test 1: Targeted query on `RollNo`              |
+| `query_test_2_non_shard_key.png`| Test 2: Scatter-gather on `Department`         |
+| `query_test_3_range_query_1.png`| Test 3: Range query on shard key (part 1)      |
+| `query_test_3_range_query_2.png`| Test 3: Range query on shard key (part 2)      |
+| `get_shard_distribution.png`   | Per-shard document count and data size          |
+
+---
+
+## Key Concepts Summary
+
+| Term             | Definition                                                                 |
+|------------------|----------------------------------------------------------------------------|
+| **Sharding**     | Horizontal partitioning of data across multiple servers                    |
+| **Shard**        | One server/replica set storing a subset of the sharded data                |
+| **Shard Key**    | The field MongoDB uses to determine which shard a document belongs to      |
+| **Chunk**        | A range of shard key values assigned to one shard (default 128 MB)         |
+| **mongos**       | Query router — client entry point that routes queries to correct shards    |
+| **Config Server**| Stores cluster metadata: shard list, chunk ranges, and mappings            |
+| **Replica Set**  | Group of MongoDB nodes with identical data for high availability           |
+| **Targeted Query** | Query including shard key → routed to exactly one shard                  |
+| **Scatter-Gather** | Query without shard key → broadcast to all shards, results merged        |
+| **Balancer**     | Background process that migrates chunks to keep shards evenly loaded       |
+| **isdbgrid**     | The identifier in `db.hello()` output that confirms `mongos` connection    |
+
+---
+
+*Experiment 4 — System Design Lab | Horizontal Database Sharding with MongoDB*
